@@ -15,8 +15,17 @@ function extractVerificationLink(htmlContent, textContent) {
 
   // Ищем полную ссылку в HTML
   if (htmlContent) {
-    // Ищем href с полным URL - НЕ останавливаемся на символах URL
-    const hrefMatch = htmlContent.match(/href=["']([^"']+blsinternational\.com[^"']*)["']/i);
+    // ОТЛАДКА: показываем фрагмент HTML с blsinternational
+    const blsIndex = htmlContent.indexOf('blsinternational');
+    if (blsIndex !== -1) {
+      const start = Math.max(0, blsIndex - 200);
+      const end = Math.min(htmlContent.length, blsIndex + 500);
+      console.log('🔍 HTML фрагмент с blsinternational:');
+      console.log(htmlContent.substring(start, end));
+    }
+
+    // Ищем href с полным URL - захватываем ВСЕ до закрывающей кавычки
+    const hrefMatch = htmlContent.match(/href=["']([^"']*blsinternational\.com[^"']*)["']/i);
     if (hrefMatch) {
       link = hrefMatch[1];
       console.log('✅ Найдена полная ссылка в HTML:', link);
@@ -184,7 +193,7 @@ app.post('/mail', async (req, res) => {
           matches.forEach((match, i) => {
             console.log(`  ${i + 1}. Длина: ${match.length}, URL: ${match.substring(0, 150)}...`);
           });
-          
+
           // Берем самую длинную ссылку (скорее всего с параметрами)
           link = matches.reduce((longest, current) =>
             current.length > longest.length ? current : longest
@@ -192,7 +201,7 @@ app.post('/mail', async (req, res) => {
           console.log('✅ Выбрана самая длинная ссылка:', link.substring(0, 200) + '...');
         } else {
           console.log('❌ Никаких ссылок blsinternational не найдено в тексте');
-          
+
           // Показываем первые 2000 символов email для отладки
           console.log('📧 Начало содержимого email:');
           console.log(emailBody.substring(0, 2000));
