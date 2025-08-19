@@ -47,9 +47,9 @@ app.post('/mail', async (req, res) => {
       ['SUBJECT', 'OTP Confirmation']
     ];
 
-    // Загружаем полное содержимое письма включая HTML
+    // ИСПРАВЛЕННЫЕ fetchOptions - используем только поддерживаемые секции
     const fetchOptions = {
-      bodies: ['HEADER', 'TEXT', 'HTML', ''], // Заголовки, текст, HTML и полное тело
+      bodies: ['HEADER', 'TEXT', ''], // Только поддерживаемые секции
       struct: true,
       markSeen: false
     };
@@ -77,23 +77,23 @@ app.post('/mail', async (req, res) => {
 
     // Собираем все содержимое письма
     let emailBody = '';
-    let htmlBody = '';
+    let htmlContent = '';
 
     if (latest.parts && latest.parts.length > 0) {
+      console.log('Части письма:', latest.parts.map(p => ({ which: p.which, size: p.body ? p.body.length : 0 })));
+      
       for (const part of latest.parts) {
         if (part.body && typeof part.body === 'string') {
           emailBody += part.body + '\n';
-
-          // Если это HTML часть
-          if (part.which === 'HTML' || (part.which === 'TEXT' && part.body.includes('<'))) {
-            htmlBody = part.body;
-            console.log('HTML часть найдена, длина:', htmlBody.length);
+          
+          // Ищем HTML контент в любой части
+          if (part.body.includes('<html') || part.body.includes('<a href') || part.body.includes('<table')) {
+            htmlContent = part.body;
+            console.log('HTML контент найден в части:', part.which, 'длина:', htmlContent.length);
           }
         }
       }
     }
-
-    console.log('Части письма:', latest.parts ? latest.parts.map(p => p.which) : 'нет частей');
 
     await connection.end();
     console.log('IMAP соединение закрыто');
@@ -110,61 +110,78 @@ app.post('/mail', async (req, res) => {
       });
     }
 
-    console.log('Содержимое письма найдено, длина:', emailBody.length);
-    console.log('Превью содержимого:', emailBody.substring(0, 500));
+    console.log('Содержимое письма найдено, общая длина:', emailBody.length);
 
     let link = null;
 
-    // Способ 1: Поиск всех HTTP/HTTPS ссылок в тексте
-    const urlRegex = /https?:\/\/[^\s<>"'\n\r\t]+/gi;
-    const matches = emailBody.match(urlRegex);
+    // Способ 1: Если найден HTML контент, парсим его
+    if (htmlContent) {
+      console.log('Парсим HTML контент...');
+      const $ = load(htmlContent);
 
-    if (matches && matches.length > 0) {
-      console.log('Найденные ссылки:', matches);
+      // Ищем ссылку с текстом "Click here"
+      const clickHereLink = $('a').filter((i, el) => {
+        const text = $(el).text().trim().toLowerCase();
+        return text.includes('click here') || text.includes('verification');
+      }).attr('href');
 
-      // Приоритет: ссылки с blsinternational
-      link = matches.find(url => url.includes('blsinternational')) || matches[0];
-      console.log('Выбранная ссылка (способ 1):', link);
+      if (clickHereLink) {
+        link = clickHereLink;
+        console.log('Найдена ссылка "Click here":', link);
+      } else {
+        // Ищем любую ссылку с blsinternational
+        const blsLink = $('a[href*="blsinternational"]').attr('href');
+        if (blsLink) {
+          link = blsLink;
+          console.log('Найдена BLS ссылка:', link);
+        } else {
+          // Ищем любую HTTP ссылку
+          const anyLink = $('a[href^="http"]').first().attr('href');
+          if (anyLink) {
+            link = anyLink;
+            console.log('Найдена любая HTTP ссылка:', link);
+          }
+        }
+      }
+
+      // Выводим все найденные ссылки для отладки
+      const allLinks = [];
+      $('a[href]').each((i, el) => {
+        allLinks.push({
+          href: $(el).attr('href'),
+          text: $(el).text().trim()
+        });
+      });
+      console.log('Все ссылки в HTML:', allLinks);
     }
 
-    // Способ 2: Если есть HTML, парсим через cheerio
-    if (!link && htmlBody) {
-      console.log('Парсим HTML содержимое...');
-      const $ = load(htmlBody);
+    // Способ 2: Поиск ссылок в тексте регулярными выражениями
+    if (!link) {
+      console.log('Ищем ссылки в тексте...');
+      const urlRegex = /https?:\/\/[^\s<>"'\n\r\t]+/gi;
+      const matches = emailBody.match(urlRegex);
 
-      // Ищем все ссылки
-      const links = [];
-      $('a[href]').each((i, el) => {
-        const href = $(el).attr('href');
-        if (href && href.startsWith('http')) {
-          links.push(href);
-        }
-      });
-
-      console.log('Ссылки из HTML:', links);
-
-      if (links.length > 0) {
-        link = links.find(url => url.includes('blsinternational')) || links[0];
-        console.log('Выбранная ссылка (способ 2):', link);
+      if (matches && matches.length > 0) {
+        console.log('Найденные ссылки в тексте:', matches);
+        link = matches.find(url => url.includes('blsinternational')) || matches[0];
+        console.log('Выбранная ссылка из текста:', link);
       }
     }
 
     // Способ 3: Поиск закодированных ссылок
     if (!link) {
       console.log('Ищем закодированные ссылки...');
-
-      // Ищем base64 или URL-encoded ссылки
-      const encodedRegex = /[A-Za-z0-9+\/=]{50,}/g;
-      const encodedMatches = emailBody.match(encodedRegex);
-
-      if (encodedMatches) {
-        console.log('Найдены возможные закодированные данные:', encodedMatches.length);
-
-        for (const encoded of encodedMatches) {
+      
+      // Ищем возможные base64 строки
+      const base64Regex = /[A-Za-z0-9+\/]{40,}={0,2}/g;
+      const base64Matches = emailBody.match(base64Regex);
+      
+      if (base64Matches) {
+        for (const encoded of base64Matches) {
           try {
-            // Пробуем декодировать как base64
             const decoded = Buffer.from(encoded, 'base64').toString('utf8');
             if (decoded.includes('http')) {
+              const urlRegex = /https?:\/\/[^\s<>"'\n\r\t]+/gi;
               const decodedUrls = decoded.match(urlRegex);
               if (decodedUrls && decodedUrls.length > 0) {
                 link = decodedUrls[0];
@@ -179,24 +196,6 @@ app.post('/mail', async (req, res) => {
       }
     }
 
-    // Способ 4: Поиск ссылок без протокола
-    if (!link) {
-      console.log('Ищем ссылки без протокола...');
-
-      const domainRegex = /(?:www\.)?[a-zA-Z0-9][a-zA-Z0-9-]{1,61}[a-zA-Z0-9]\.[a-zA-Z]{2,}[^\s<>"'\n\r\t]*/gi;
-      const domainMatches = emailBody.match(domainRegex);
-
-      if (domainMatches) {
-        console.log('Найденные домены:', domainMatches);
-
-        const blsDomain = domainMatches.find(domain => domain.includes('blsinternational'));
-        if (blsDomain) {
-          link = blsDomain.startsWith('http') ? blsDomain : 'https://' + blsDomain;
-          console.log('Найдена ссылка по домену:', link);
-        }
-      }
-    }
-
     console.log('Финальная найденная ссылка:', link);
 
     if (!link) {
@@ -206,10 +205,11 @@ app.post('/mail', async (req, res) => {
         debug: {
           bodyLength: emailBody.length,
           bodyPreview: emailBody.substring(0, 1000),
-          containsHtml: emailBody.includes('<html'),
+          hasHtmlContent: !!htmlContent,
+          htmlContentLength: htmlContent.length,
+          containsClickHere: emailBody.toLowerCase().includes('click here'),
           containsHttp: emailBody.includes('http'),
-          containsBls: emailBody.includes('blsinternational'),
-          urlMatches: emailBody.match(urlRegex) || []
+          containsBls: emailBody.includes('blsinternational')
         }
       });
     }
