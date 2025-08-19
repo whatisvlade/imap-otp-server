@@ -15,16 +15,16 @@ function extractVerificationLink(htmlContent, textContent) {
 
   // Ищем полную ссылку в HTML
   if (htmlContent) {
-    // Ищем href с полным URL (включая все параметры)
-    const hrefMatch = htmlContent.match(/href=["']([^"']*blsinternational\.com[^"']*)["']/i);
+    // Ищем href с полным URL - НЕ останавливаемся на символах URL
+    const hrefMatch = htmlContent.match(/href=["']([^"']+blsinternational\.com[^"']*)["']/i);
     if (hrefMatch) {
       link = hrefMatch[1];
       console.log('✅ Найдена полная ссылка в HTML:', link);
     }
 
-    // Если не найдена, ищем любую ссылку с blsinternational
+    // Если не найдена, ищем любую ссылку с blsinternational - расширенный regex
     if (!link) {
-      const urlMatch = htmlContent.match(/(https?:\/\/[^"\s<>]*blsinternational\.com[^"\s<>]*)/i);
+      const urlMatch = htmlContent.match(/(https?:\/\/[^\s"'<>]+blsinternational\.com[^\s"'<>]*)/i);
       if (urlMatch) {
         link = urlMatch[1];
         console.log('✅ Найдена ссылка через regex:', link);
@@ -32,9 +32,9 @@ function extractVerificationLink(htmlContent, textContent) {
     }
   }
 
-  // Если в HTML не найдена, ищем в тексте
+  // Если в HTML не найдена, ищем в тексте - самый широкий поиск
   if (!link && textContent) {
-    const textUrlMatch = textContent.match(/(https?:\/\/[^\s]*blsinternational\.com[^\s]*)/i);
+    const textUrlMatch = textContent.match(/(https?:\/\/[^\s]+blsinternational\.com[^\s]*)/i);
     if (textUrlMatch) {
       link = textUrlMatch[1];
       console.log('✅ Найдена ссылка в тексте:', link);
@@ -161,11 +161,11 @@ app.post('/mail', async (req, res) => {
 
     if (!link) {
       console.log('Ссылка не найдена через основную функцию, пробуем альтернативные методы...');
-      
+
       // Альтернативный поиск в HTML
       if (htmlContent) {
         const $ = load(htmlContent);
-        
+
         // Ищем любую ссылку с blsinternational (БЕЗ очистки!)
         const blsLink = $('a[href*="blsinternational"]').attr('href');
         if (blsLink) {
@@ -173,14 +173,28 @@ app.post('/mail', async (req, res) => {
           console.log('✅ Найдена BLS ссылка через cheerio:', link);
         }
       }
-      
-      // Поиск в тексте как последний вариант
+
+      // Поиск в тексте как последний вариант - максимально широкий поиск
       if (!link) {
-        const urlRegex = /(https?:\/\/[^\s]*blsinternational\.com[^\s]*)/gi;
+        const urlRegex = /(https?:\/\/[^\s\n\r\t]+blsinternational\.com[^\s\n\r\t]*)/gi;
         const matches = emailBody.match(urlRegex);
         if (matches && matches.length > 0) {
-          link = matches[0]; // НЕ используем cleanAndDecodeUrl!
-          console.log('✅ Найдена ссылка в тексте:', link);
+          console.log('🔍 Все найденные ссылки в тексте:');
+          matches.forEach((match, i) => {
+            console.log(`  ${i + 1}. Длина: ${match.length}, URL: ${match.substring(0, 150)}...`);
+          });
+          
+          // Берем самую длинную ссылку (скорее всего с параметрами)
+          link = matches.reduce((longest, current) =>
+            current.length > longest.length ? current : longest
+          );
+          console.log('✅ Выбрана самая длинная ссылка:', link.substring(0, 200) + '...');
+        } else {
+          console.log('❌ Никаких ссылок blsinternational не найдено в тексте');
+          
+          // Показываем первые 2000 символов email для отладки
+          console.log('📧 Начало содержимого email:');
+          console.log(emailBody.substring(0, 2000));
         }
       }
     }
