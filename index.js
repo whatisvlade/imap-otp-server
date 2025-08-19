@@ -10,38 +10,44 @@ app.use(express.json());
 // Улучшенная функция для очистки и декодирования URL
 function cleanAndDecodeUrl(url) {
   if (!url) return null;
-  
+
   try {
     // Убираем лишние пробелы
     let cleanUrl = url.trim();
-    
+
     // Убираем все после '3D'http:// или подобных конструкций
     cleanUrl = cleanUrl.replace(/3D'http:\/\/.*$/, '');
     cleanUrl = cleanUrl.replace(/3D"http:\/\/.*$/, '');
-    
+
     // Убираем все после = в конце
     cleanUrl = cleanUrl.replace(/=\s*$/, '');
-    
+
     // Декодируем URL если он закодирован
     if (cleanUrl.includes('%')) {
       cleanUrl = decodeURIComponent(cleanUrl);
     }
-    
+
     // Убираем лишние символы в конце (все что не буквы, цифры или допустимые URL символы)
     cleanUrl = cleanUrl.replace(/[^a-zA-Z0-9\-._~:/?#[\]@!$&'()*+,;=]+$/, '');
-    
+
+    // Заменяем HTTP на HTTPS для доменов blsinternational.com
+    if (cleanUrl.includes('blsinternational.com') && cleanUrl.startsWith('http://')) {
+      cleanUrl = cleanUrl.replace('http://', 'https://');
+      console.log('HTTP заменен на HTTPS для BLS домена');
+    }
+
     // Проверяем что это валидный URL
     new URL(cleanUrl);
-    
+
     console.log('URL очищен:', url.substring(0, 100) + '...', '->', cleanUrl);
     return cleanUrl;
   } catch (e) {
     console.log('Ошибка очистки URL:', e.message);
-    
+
     // Попробуем более агрессивную очистку
     try {
       let fallbackUrl = url.trim();
-      
+
       // Ищем основную часть URL до первого проблемного символа
       const match = fallbackUrl.match(/(https?:\/\/[^'"\s<>=]+)/);
       if (match) {
@@ -55,7 +61,7 @@ function cleanAndDecodeUrl(url) {
     } catch (e2) {
       console.log('Fallback очистка тоже не удалась');
     }
-    
+
     return null;
   }
 }
@@ -133,11 +139,11 @@ app.post('/mail', async (req, res) => {
 
     if (latest.parts && latest.parts.length > 0) {
       console.log('Части письма:', latest.parts.map(p => ({ which: p.which, size: p.body ? p.body.length : 0 })));
-      
+
       for (const part of latest.parts) {
         if (part.body && typeof part.body === 'string') {
           emailBody += part.body + '\n';
-          
+
           // Ищем HTML контент в любой части
           if (part.body.includes('<html') || part.body.includes('<a href') || part.body.includes('<table')) {
             htmlContent = part.body;
@@ -217,11 +223,11 @@ app.post('/mail', async (req, res) => {
     // Способ 2: Поиск ссылок в тексте регулярными выражениями
     if (!link) {
       console.log('Ищем ссылки в тексте...');
-      
+
       // Сначала ищем ссылки с email_otp_verify
       const otpVerifyRegex = /https?:\/\/[^\s<>"'\n\r\t]*email_otp_verify[^\s<>"'\n\r\t]*/gi;
       const otpMatches = emailBody.match(otpVerifyRegex);
-      
+
       if (otpMatches && otpMatches.length > 0) {
         console.log('Найденные OTP verify ссылки:', otpMatches.map(u => u.substring(0, 100) + '...'));
         link = cleanAndDecodeUrl(otpMatches[0]);
