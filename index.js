@@ -7,6 +7,59 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Улучшенная функция для очистки и декодирования URL
+function cleanAndDecodeUrl(url) {
+  if (!url) return null;
+  
+  try {
+    // Убираем лишние пробелы
+    let cleanUrl = url.trim();
+    
+    // Убираем все после '3D'http:// или подобных конструкций
+    cleanUrl = cleanUrl.replace(/3D'http:\/\/.*$/, '');
+    cleanUrl = cleanUrl.replace(/3D"http:\/\/.*$/, '');
+    
+    // Убираем все после = в конце
+    cleanUrl = cleanUrl.replace(/=\s*$/, '');
+    
+    // Декодируем URL если он закодирован
+    if (cleanUrl.includes('%')) {
+      cleanUrl = decodeURIComponent(cleanUrl);
+    }
+    
+    // Убираем лишние символы в конце (все что не буквы, цифры или допустимые URL символы)
+    cleanUrl = cleanUrl.replace(/[^a-zA-Z0-9\-._~:/?#[\]@!$&'()*+,;=]+$/, '');
+    
+    // Проверяем что это валидный URL
+    new URL(cleanUrl);
+    
+    console.log('URL очищен:', url.substring(0, 100) + '...', '->', cleanUrl);
+    return cleanUrl;
+  } catch (e) {
+    console.log('Ошибка очистки URL:', e.message);
+    
+    // Попробуем более агрессивную очистку
+    try {
+      let fallbackUrl = url.trim();
+      
+      // Ищем основную часть URL до первого проблемного символа
+      const match = fallbackUrl.match(/(https?:\/\/[^'"\s<>=]+)/);
+      if (match) {
+        fallbackUrl = match[1];
+        // Убираем trailing символы
+        fallbackUrl = fallbackUrl.replace(/[^a-zA-Z0-9\-._~:/?#[\]@!$&'()*+,;=]+$/, '');
+        new URL(fallbackUrl);
+        console.log('URL очищен (fallback):', fallbackUrl);
+        return fallbackUrl;
+      }
+    } catch (e2) {
+      console.log('Fallback очистка тоже не удалась');
+    }
+    
+    return null;
+  }
+}
+
 app.post('/mail', async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
@@ -47,9 +100,8 @@ app.post('/mail', async (req, res) => {
       ['SUBJECT', 'OTP Confirmation']
     ];
 
-    // ИСПРАВЛЕННЫЕ fetchOptions - используем только поддерживаемые секции
     const fetchOptions = {
-      bodies: ['HEADER', 'TEXT', ''], // Только поддерживаемые секции
+      bodies: ['HEADER', 'TEXT', ''], // Только рабочие секции
       struct: true,
       markSeen: false
     };
@@ -122,34 +174,41 @@ app.post('/mail', async (req, res) => {
       // Ищем ссылку с текстом "Click here"
       const clickHereLink = $('a').filter((i, el) => {
         const text = $(el).text().trim().toLowerCase();
-        return text.includes('click here') || text.includes('verification');
+        return text.includes('click here') || text.includes('verification') || text.includes('verify');
       }).attr('href');
 
       if (clickHereLink) {
-        link = clickHereLink;
-        console.log('Найдена ссылка "Click here":', link);
-      } else {
-        // Ищем любую ссылку с blsinternational
+        link = cleanAndDecodeUrl(clickHereLink);
+        console.log('Найдена ссылка "Click here":', clickHereLink.substring(0, 100) + '...', '->', link);
+      }
+
+      // Если не найдено, ищем ссылку с email_otp_verify (правильная ссылка)
+      if (!link) {
+        const otpVerifyLink = $('a[href*="email_otp_verify"]').attr('href');
+        if (otpVerifyLink) {
+          link = cleanAndDecodeUrl(otpVerifyLink);
+          console.log('Найдена ссылка email_otp_verify:', otpVerifyLink.substring(0, 100) + '...', '->', link);
+        }
+      }
+
+      // Если не найдено, ищем любую ссылку с blsinternational
+      if (!link) {
         const blsLink = $('a[href*="blsinternational"]').attr('href');
         if (blsLink) {
-          link = blsLink;
-          console.log('Найдена BLS ссылка:', link);
-        } else {
-          // Ищем любую HTTP ссылку
-          const anyLink = $('a[href^="http"]').first().attr('href');
-          if (anyLink) {
-            link = anyLink;
-            console.log('Найдена любая HTTP ссылка:', link);
-          }
+          link = cleanAndDecodeUrl(blsLink);
+          console.log('Найдена BLS ссылка:', blsLink.substring(0, 100) + '...', '->', link);
         }
       }
 
       // Выводим все найденные ссылки для отладки
       const allLinks = [];
       $('a[href]').each((i, el) => {
+        const href = $(el).attr('href');
+        const text = $(el).text().trim();
         allLinks.push({
-          href: $(el).attr('href'),
-          text: $(el).text().trim()
+          original: href ? href.substring(0, 100) + '...' : null,
+          text: text,
+          isOtpVerify: href ? href.includes('email_otp_verify') : false
         });
       });
       console.log('Все ссылки в HTML:', allLinks);
@@ -158,40 +217,25 @@ app.post('/mail', async (req, res) => {
     // Способ 2: Поиск ссылок в тексте регулярными выражениями
     if (!link) {
       console.log('Ищем ссылки в тексте...');
-      const urlRegex = /https?:\/\/[^\s<>"'\n\r\t]+/gi;
-      const matches = emailBody.match(urlRegex);
-
-      if (matches && matches.length > 0) {
-        console.log('Найденные ссылки в тексте:', matches);
-        link = matches.find(url => url.includes('blsinternational')) || matches[0];
-        console.log('Выбранная ссылка из текста:', link);
-      }
-    }
-
-    // Способ 3: Поиск закодированных ссылок
-    if (!link) {
-      console.log('Ищем закодированные ссылки...');
       
-      // Ищем возможные base64 строки
-      const base64Regex = /[A-Za-z0-9+\/]{40,}={0,2}/g;
-      const base64Matches = emailBody.match(base64Regex);
+      // Сначала ищем ссылки с email_otp_verify
+      const otpVerifyRegex = /https?:\/\/[^\s<>"'\n\r\t]*email_otp_verify[^\s<>"'\n\r\t]*/gi;
+      const otpMatches = emailBody.match(otpVerifyRegex);
       
-      if (base64Matches) {
-        for (const encoded of base64Matches) {
-          try {
-            const decoded = Buffer.from(encoded, 'base64').toString('utf8');
-            if (decoded.includes('http')) {
-              const urlRegex = /https?:\/\/[^\s<>"'\n\r\t]+/gi;
-              const decodedUrls = decoded.match(urlRegex);
-              if (decodedUrls && decodedUrls.length > 0) {
-                link = decodedUrls[0];
-                console.log('Найдена декодированная ссылка:', link);
-                break;
-              }
-            }
-          } catch (e) {
-            // Игнорируем ошибки декодирования
-          }
+      if (otpMatches && otpMatches.length > 0) {
+        console.log('Найденные OTP verify ссылки:', otpMatches.map(u => u.substring(0, 100) + '...'));
+        link = cleanAndDecodeUrl(otpMatches[0]);
+        console.log('Выбранная OTP verify ссылка:', link);
+      } else {
+        // Если не найдено, ищем любые ссылки
+        const urlRegex = /https?:\/\/[^\s<>"'\n\r\t]+/gi;
+        const matches = emailBody.match(urlRegex);
+
+        if (matches && matches.length > 0) {
+          console.log('Найденные ссылки в тексте:', matches.map(u => u.substring(0, 100) + '...'));
+          const rawLink = matches.find(url => url.includes('blsinternational')) || matches[0];
+          link = cleanAndDecodeUrl(rawLink);
+          console.log('Выбранная ссылка из текста:', link);
         }
       }
     }
@@ -209,7 +253,8 @@ app.post('/mail', async (req, res) => {
           htmlContentLength: htmlContent.length,
           containsClickHere: emailBody.toLowerCase().includes('click here'),
           containsHttp: emailBody.includes('http'),
-          containsBls: emailBody.includes('blsinternational')
+          containsBls: emailBody.includes('blsinternational'),
+          containsOtpVerify: emailBody.includes('email_otp_verify')
         }
       });
     }
