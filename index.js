@@ -1,7 +1,7 @@
 import express from 'express';
 import Imap from 'imap-simple';
 import cors from 'cors';
-import cheerio from 'cheerio';
+import { load } from 'cheerio';
 
 const app = express();
 app.use(cors());
@@ -10,7 +10,7 @@ app.use(express.json());
 app.post('/mail', async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
-    return res.status(400).json({ error: "email and password required" });
+    return res.status(400).json({ error: 'email and password required' });
   }
 
   const config = {
@@ -29,7 +29,7 @@ app.post('/mail', async (req, res) => {
     const connection = await Imap.connect(config);
     await connection.openBox('INBOX');
 
-    // Ищем письма от нужного отправителя и с нужной темой
+    // Ищем письма от noreply.app@blsinternational.com с темой OTP Confirmation
     const criteria = [
       ['FROM', 'noreply.app@blsinternational.com'],
       ['SUBJECT', 'OTP Confirmation']
@@ -39,37 +39,35 @@ app.post('/mail', async (req, res) => {
       struct: true,
       markSeen: false
     };
-    const messages = await connection.search(criteria, fetchOptions);
 
+    const messages = await connection.search(criteria, fetchOptions);
     if (!messages.length) {
       await connection.end();
-      return res.json({ message: "No OTP Confirmation emails found" });
+      return res.json({ message: 'No OTP Confirmation emails found' });
     }
 
     // Берём самое свежее
     const latest = messages[messages.length - 1];
     const htmlPart = latest.parts.find(p => p.which === 'HTML');
     const html = htmlPart?.body || '';
-
     await connection.end();
 
     if (!html) {
-      return res.status(500).json({ error: "HTML body not found" });
+      return res.status(500).json({ error: 'HTML body not found' });
     }
 
     // Парсим HTML и вытаскиваем ссылку
-    const $ = cheerio.load(html);
+    const $ = load(html);
     const link = $('a')
       .filter((i, el) => $(el).text().trim().includes('Click here'))
       .attr('href');
 
     if (!link) {
-      return res.status(500).json({ error: "Verification link not found" });
+      return res.status(500).json({ error: 'Verification link not found' });
     }
 
-    // Возвращаем только ссылку
+    // Возвращаем ссылку
     res.json({ link });
-
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
