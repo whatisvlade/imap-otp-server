@@ -13,6 +13,8 @@ app.post('/mail', async (req, res) => {
     return res.status(400).json({ error: 'email and password required' });
   }
 
+  console.log(`Попытка подключения к IMAP для: ${email}`);
+
   const config = {
     imap: {
       user: email,
@@ -20,14 +22,24 @@ app.post('/mail', async (req, res) => {
       host: 'imap.firstmail.ltd',
       port: 993,
       tls: true,
-      tlsOptions: { rejectUnauthorized: false },
-      authTimeout: 5000
+      tlsOptions: { 
+        rejectUnauthorized: false,
+        servername: 'imap.firstmail.ltd'
+      },
+      authTimeout: 10000,
+      connTimeout: 10000
     }
   };
 
+  let connection = null;
+
   try {
-    const connection = await Imap.connect(config);
+    console.log('Подключаемся к IMAP серверу...');
+    connection = await Imap.connect(config);
+    console.log('IMAP подключение установлено');
+    
     await connection.openBox('INBOX');
+    console.log('INBOX открыт');
 
     // Ищем письма от noreply.app@blsinternational.com с темой OTP Confirmation
     const criteria = [
@@ -40,11 +52,16 @@ app.post('/mail', async (req, res) => {
       markSeen: false
     };
 
+    console.log('Ищем письма с OTP...');
     const messages = await connection.search(criteria, fetchOptions);
+    
     if (!messages.length) {
+      console.log('Письма с OTP не найдены');
       await connection.end();
       return res.json({ message: 'No OTP Confirmation emails found' });
     }
+
+    console.log(`Найдено писем: ${messages.length}`);
 
     // Сортируем по дате и берём самое свежее (последнее)
     messages.sort((a, b) => {
@@ -54,7 +71,6 @@ app.post('/mail', async (req, res) => {
     });
 
     const latest = messages[0]; // Самое свежее письмо
-    console.log('Найдено писем:', messages.length);
     console.log('Дата последнего письма:', latest.attributes.date);
 
     // Ищем HTML часть письма
@@ -65,15 +81,18 @@ app.post('/mail', async (req, res) => {
     if (!html) {
       const textPart = latest.parts.find(p => p.which === 'TEXT');
       html = textPart?.body || '';
+      console.log('HTML не найден, используем TEXT');
     }
 
     await connection.end();
+    console.log('IMAP соединение закрыто');
 
     if (!html) {
+      console.log('HTML/TEXT содержимое не найдено');
       return res.status(500).json({ error: 'HTML/TEXT body not found' });
     }
 
-    console.log('HTML содержимое письма:', html.substring(0, 500) + '...');
+    console.log('HTML содержимое найдено, длина:', html.length);
 
     // Парсим HTML и вытаскиваем ссылку
     const $ = load(html);
@@ -110,26 +129,63 @@ app.post('/mail', async (req, res) => {
     console.log('Найденная ссылка:', link);
 
     if (!link) {
+      console.log('Ссылка не найдена в письме');
       return res.status(500).json({ 
         error: 'Verification link not found',
         debug: {
           htmlLength: html.length,
-          htmlPreview: html.substring(0, 200)
+          htmlPreview: html.substring(0, 300)
         }
       });
     }
 
     // Возвращаем ссылку
+    console.log('Ссылка успешно найдена и отправлена');
     res.json({ link });
+
   } catch (err) {
     console.error('IMAP Error:', err);
-    res.status(500).json({ error: err.message });
+    
+    // Закрываем соединение в случае ошибки
+    if (connection) {
+      try {
+        await connection.end();
+      } catch (closeErr) {
+        console.error('Ошибка при закрытии соединения:', closeErr);
+      }
+    }
+
+    // Определяем тип ошибки
+    let errorMessage = err.message;
+    if (err.textCode === 'AUTHENTICATIONFAILED') {
+      errorMessage = 'Неверный email или пароль для IMAP';
+    } else if (err.message.includes('timeout')) {
+      errorMessage = 'Таймаут подключения к IMAP серверу';
+    } else if (err.message.includes('ENOTFOUND')) {
+      errorMessage = 'IMAP сервер недоступен';
+    }
+
+    res.status(500).json({ 
+      error: errorMessage,
+      details: err.message 
+    });
   }
 });
 
 app.get('/', (req, res) => {
-  res.send('Firstmail IMAP API up');
+  res.send('Firstmail IMAP API up and running');
+});
+
+app.get('/test', (req, res) => {
+  res.json({ 
+    status: 'OK', 
+    timestamp: new Date().toISOString(),
+    server: 'imap.firstmail.ltd:993'
+  });
 });
 
 const port = process.env.PORT || 3000;
-app.listen(port, () => console.log(`Server started on port ${port}`));
+app.listen(port, () => {
+  console.log(`Server started on port ${port}`);
+  console.log(`Test endpoint: http://localhost:${port}/test`);
+});
