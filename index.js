@@ -22,9 +22,10 @@ function extractVerificationLink(htmlContent, textContent) {
       console.log('✅ Найдена полная ссылка в HTML:', link);
     }
 
-    // Если не найдена, ищем любую ссылку с blsinternational - расширенный regex
+    // Если не найдена, ищем любую ссылку с blsinternational - МАКСИМАЛЬНО широкий regex
     if (!link) {
-      const urlMatch = htmlContent.match(/(https?:\/\/[^\s"'<>]+blsinternational\.com[^\s"'<>]*)/i);
+      // Ищем все что начинается с http и содержит blsinternational до первого пробела или кавычки
+      const urlMatch = htmlContent.match(/(https?:\/\/[^"\s<>]*blsinternational\.com[^"\s<>]*)/i);
       if (urlMatch) {
         link = urlMatch[1];
         console.log('✅ Найдена ссылка через regex:', link);
