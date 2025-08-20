@@ -1,15 +1,15 @@
 {
   "name": "firstmail-imap-api",
   "version": "1.0.0",
-  "main": "index.js",
   "type": "module",
+  "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "express": "^4.19.2",
-    "imap-simple": "^5.0.0",
-    "cors": "^2.8.5",
-    "cheerio": "^1.0.0-rc.12"
+    "express": "^4.18.2",
+    "imap": "^0.8.19", 
+    "mailparser": "^3.6.5",
+    "cors": "^2.8.5"
   }
 }
