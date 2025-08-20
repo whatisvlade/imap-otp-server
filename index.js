@@ -10,51 +10,86 @@ app.use(express.json());
 // Функция для извлечения полной ссылки верификации
 function extractVerificationLink(htmlContent, textContent) {
   console.log('🔍 Извлекаем ссылку верификации...');
+  console.log('📊 Размеры контента: HTML =', htmlContent?.length || 0, 'TEXT =', textContent?.length || 0);
 
   let link = null;
 
-  // Ищем полную ссылку в HTML
   if (htmlContent) {
     // ОТЛАДКА: показываем фрагмент HTML с blsinternational
     const blsIndex = htmlContent.indexOf('blsinternational');
     if (blsIndex !== -1) {
-      const start = Math.max(0, blsIndex - 200);
-      const end = Math.min(htmlContent.length, blsIndex + 500);
+      const start = Math.max(0, blsIndex - 100);
+      const end = Math.min(htmlContent.length, blsIndex + 800);
       console.log('🔍 HTML фрагмент с blsinternational:');
       console.log(htmlContent.substring(start, end));
     }
 
-    // Ищем href с полным URL - захватываем ВСЕ до закрывающей кавычки
+    // ОТЛАДКА: показываем все href с blsinternational
+    console.log('🔍 Поиск всех href с blsinternational:');
+    const hrefRegex = /href=["']([^"']*blsinternational[^"']*)["']/gi;
+    let match;
+    while ((match = hrefRegex.exec(htmlContent)) !== null) {
+      console.log('Найденный href:', match[1]);
+      console.log('Длина href:', match[1].length);
+    }
+
+    // Основной поиск - ИСПРАВЛЕННЫЙ regex для захвата ВСЕЙ ссылки
     const hrefMatch = htmlContent.match(/href=["']([^"']*blsinternational\.com[^"']*)["']/i);
     if (hrefMatch) {
       link = hrefMatch[1];
       console.log('✅ Найдена полная ссылка в HTML:', link);
+      console.log('📏 Длина найденной ссылки:', link.length);
     }
 
-    // Если не найдена, ищем любую ссылку с blsinternational - МАКСИМАЛЬНО широкий regex
+    // Если не найдена через href, ищем прямо в тексте HTML
     if (!link) {
-      // Ищем все что начинается с http и содержит blsinternational до первого пробела или кавычки
-      const urlMatch = htmlContent.match(/(https?:\/\/[^"\s<>]*blsinternational\.com[^"\s<>]*)/i);
+      console.log('🔍 Поиск через regex в HTML тексте...');
+      const urlMatch = htmlContent.match(/(https?:\/\/[^\s"'<>]*blsinternational\.com[^\s"'<>]*)/i);
       if (urlMatch) {
         link = urlMatch[1];
-        console.log('✅ Найдена ссылка через regex:', link);
+        console.log('✅ Найдена ссылка через regex в HTML:', link);
+        console.log('📏 Длина найденной ссылки:', link.length);
       }
     }
   }
 
-  // Если в HTML не найдена, ищем в тексте - самый широкий поиск
+  // Поиск в текстовом содержимом
   if (!link && textContent) {
-    const textUrlMatch = textContent.match(/(https?:\/\/[^\s]+blsinternational\.com[^\s]*)/i);
+    console.log('🔍 Поиск в текстовом содержимом...');
+    const textUrlMatch = textContent.match(/(https?:\/\/[^\s]*blsinternational\.com[^\s]*)/i);
     if (textUrlMatch) {
       link = textUrlMatch[1];
       console.log('✅ Найдена ссылка в тексте:', link);
+      console.log('📏 Длина найденной ссылки:', link.length);
     }
   }
 
   if (link) {
-    // Декодируем только HTML entities, НЕ URL параметры
-    link = link.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+    console.log('🔗 Ссылка ДО обработки:', link);
+
+    // ВАЖНО: Декодируем только HTML entities, НЕ трогаем URL-параметры!
+    const originalLink = link;
+    link = link.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"');
+
+    console.log('🔗 Ссылка ПОСЛЕ декодирования HTML entities:', link);
+    console.log('📏 Изменение длины:', originalLink.length, '->', link.length);
+
+    // Убираем возможные лишние символы в конце
+    const beforeCleanup = link;
+    link = link.replace(/[>\]}\)]*$/, '');
+
+    if (beforeCleanup !== link) {
+      console.log('🧹 Убрали лишние символы в конце:', beforeCleanup, '->', link);
+    }
+
     console.log('🔗 Финальная ссылка:', link);
+    console.log('📏 Финальная длина:', link.length);
+
+    // ПРОВЕРКА: если ссылка слишком короткая, это проблема
+    if (link.length < 100) {
+      console.warn('⚠️ ВНИМАНИЕ: Ссылка подозрительно короткая!');
+    }
+
     return link;
   }
 
@@ -135,6 +170,16 @@ app.post('/mail', async (req, res) => {
 
     if (latest.parts && latest.parts.length > 0) {
       console.log('Части письма:', latest.parts.map(p => ({ which: p.which, size: p.body ? p.body.length : 0 })));
+
+      // ОТЛАДКА: Показываем первые 1000 символов каждой части
+      console.log('🔍 ОТЛАДКА: Показываем первые 1000 символов каждой части:');
+      for (const part of latest.parts) {
+        if (part.body && typeof part.body === 'string') {
+          console.log(`\n--- Часть ${part.which} (${part.body.length} символов) ---`);
+          console.log(part.body.substring(0, 1000));
+          console.log('--- Конец части ---\n');
+        }
+      }
 
       for (const part of latest.parts) {
         if (part.body && typeof part.body === 'string') {
