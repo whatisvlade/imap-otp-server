@@ -7,10 +7,46 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Функция для декодирования Quoted-Printable
+function decodeQuotedPrintable(str) {
+  if (!str) return str;
+  
+  return str
+    .replace(/=\r?\n/g, '') // Убираем мягкие переносы строк
+    .replace(/=([0-9A-F]{2})/gi, (match, hex) => {
+      return String.fromCharCode(parseInt(hex, 16));
+    })
+    .replace(/=3D/g, '=') // Специально для =3D -> =
+    .replace(/=20/g, ' ') // Пробелы
+    .replace(/=09/g, '\t'); // Табы
+}
+
 // Функция для извлечения полной ссылки верификации
 function extractVerificationLink(htmlContent, textContent) {
   console.log('🔍 Извлекаем ссылку верификации...');
   console.log('📊 Размеры контента: HTML =', htmlContent?.length || 0, 'TEXT =', textContent?.length || 0);
+
+  // ДЕКОДИРУЕМ Quoted-Printable ПЕРЕД поиском!
+  if (htmlContent && htmlContent.includes('=3D')) {
+    console.log('🔧 Декодируем Quoted-Printable в HTML контенте...');
+    const originalLength = htmlContent.length;
+    htmlContent = decodeQuotedPrintable(htmlContent);
+    console.log('📏 Размер после декодирования:', originalLength, '->', htmlContent.length);
+    
+    // Показываем фрагмент после декодирования
+    const blsIndex = htmlContent.indexOf('blsinternational');
+    if (blsIndex !== -1) {
+      const start = Math.max(0, blsIndex - 200);
+      const end = Math.min(htmlContent.length, blsIndex + 1000);
+      console.log('🔍 HTML фрагмент ПОСЛЕ декодирования:');
+      console.log(htmlContent.substring(start, end));
+    }
+  }
+
+  if (textContent && textContent.includes('=3D')) {
+    console.log('🔧 Декодируем Quoted-Printable в текстовом контенте...');
+    textContent = decodeQuotedPrintable(textContent);
+  }
 
   let link = null;
 
