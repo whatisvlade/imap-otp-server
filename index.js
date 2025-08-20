@@ -1,10 +1,7 @@
-// Обновленный код для IMAP сервера
-// Добавляет поддержку фильтрации по теме письма и отправителю
-
-const express = require('express');
-const Imap = require('imap');
-const { simpleParser } = require('mailparser');
-const cors = require('cors');
+import express from 'express';
+import Imap from 'imap';
+import { simpleParser } from 'mailparser';
+import cors from 'cors';
 
 const app = express();
 app.use(cors());
@@ -213,4 +210,4 @@ app.listen(PORT, () => {
     console.log(`📧 Поддерживает фильтрацию по теме и отправителю`);
 });
 
-module.exports = app;
+export default app;
