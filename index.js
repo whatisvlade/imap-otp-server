@@ -233,11 +233,15 @@ app.post('/mail/:type', async (req, res) => {
     if (type === 'otp') {
       // Поиск OTP писем - ищем по ключевым словам в теме
       criteria = [
-        ['OR',
-          ['SUBJECT', 'OTP'],
-          ['SUBJECT', 'verification'],
-          ['SUBJECT', 'code'],
-          ['SUBJECT', 'OTP Confirmation']
+        ['OR', 
+          ['SUBJECT', 'OTP'], 
+          ['OR', 
+            ['SUBJECT', 'verification'], 
+            ['OR', 
+              ['SUBJECT', 'code'], 
+              ['SUBJECT', 'OTP Confirmation']
+            ]
+          ]
         ]
       ];
       searchDescription = 'OTP писем';
