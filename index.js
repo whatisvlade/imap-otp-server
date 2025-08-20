@@ -133,6 +133,254 @@ function extractVerificationLink(htmlContent, textContent) {
   return null;
 }
 
+// Функция для извлечения OTP кода
+function extractOTPCode(htmlContent, textContent) {
+  console.log('🔍 Извлекаем OTP код...');
+  
+  const emailContent = textContent || htmlContent || '';
+  
+  // Поиск 6-значного OTP кода
+  const otpMatch = emailContent.match(/\b\d{6}\b/);
+  
+  if (otpMatch) {
+    console.log('✅ OTP код найден:', otpMatch[0]);
+    return otpMatch[0];
+  }
+  
+  console.log('❌ OTP код не найден');
+  return null;
+}
+
+// Функция для извлечения ссылки на запись
+function extractAppointmentLink(htmlContent, textContent) {
+  console.log('🔍 Извлекаем ссылку на запись...');
+  
+  const emailContent = textContent || htmlContent || '';
+  
+  // Поиск ссылок
+  const linkPatterns = [
+    /https?:\/\/[^\s<>"{}|\\^`[\]]+/g,
+    /www\.[^\s<>"{}|\\^`[\]]+/g
+  ];
+
+  let foundLink = null;
+  for (const pattern of linkPatterns) {
+    const matches = emailContent.match(pattern);
+    if (matches) {
+      foundLink = matches.find(link => 
+        link.length > 50 && 
+        (link.includes('appointment') || 
+         link.includes('booking') || 
+         link.includes('visa') ||
+         link.includes('blsslovakia'))
+      );
+      if (foundLink) break;
+    }
+  }
+
+  if (foundLink) {
+    // Очищаем ссылку от лишних символов
+    foundLink = foundLink.replace(/[.,;!?]+$/, '');
+    console.log('✅ Ссылка на запись найдена:', foundLink);
+    return foundLink;
+  }
+  
+  console.log('❌ Ссылка на запись не найдена');
+  return null;
+}
+
+// Универсальный endpoint для разных типов писем
+app.post('/mail/:type', async (req, res) => {
+  const { type } = req.params;
+  const { email, password } = req.body;
+  
+  console.log(`Запрос типа: ${type} для email: ${email}`);
+  
+  if (!email || !password) {
+    return res.status(400).json({ error: 'email and password required' });
+  }
+
+  const config = {
+    imap: {
+      user: email,
+      password,
+      host: 'imap.firstmail.ltd',
+      port: 993,
+      tls: true,
+      tlsOptions: {
+        rejectUnauthorized: false,
+        servername: 'imap.firstmail.ltd'
+      },
+      authTimeout: 10000,
+      connTimeout: 10000
+    }
+  };
+
+  let connection = null;
+
+  try {
+    console.log('Подключаемся к IMAP серверу...');
+    connection = await Imap.connect(config);
+    console.log('IMAP подключение установлено');
+
+    await connection.openBox('INBOX');
+    console.log('INBOX открыт');
+
+    let criteria;
+    let searchDescription;
+
+    // Определяем критерии поиска в зависимости от типа
+    if (type === 'otp') {
+      // Поиск OTP писем - ищем по ключевым словам в теме
+      criteria = [
+        ['OR',
+          ['SUBJECT', 'OTP'],
+          ['SUBJECT', 'verification'],
+          ['SUBJECT', 'code'],
+          ['SUBJECT', 'OTP Confirmation']
+        ]
+      ];
+      searchDescription = 'OTP писем';
+    } else if (type === 'appointment') {
+      // Поиск писем о записи на визу - точная тема
+      criteria = [
+        ['SUBJECT', 'Slovakia Visa Appointment Booking Link']
+      ];
+      searchDescription = 'писем о записи на визу Словакии';
+    } else {
+      await connection.end();
+      return res.status(400).json({ 
+        error: 'Invalid type. Use "otp" or "appointment"' 
+      });
+    }
+
+    const fetchOptions = {
+      bodies: ['HEADER', 'TEXT', ''],
+      struct: true,
+      markSeen: false
+    };
+
+    console.log(`Ищем ${searchDescription}...`);
+    const messages = await connection.search(criteria, fetchOptions);
+
+    if (!messages.length) {
+      console.log(`${searchDescription} не найдены`);
+      await connection.end();
+      return res.json({ 
+        success: false,
+        message: `No ${type} emails found`,
+        emailType: type
+      });
+    }
+
+    console.log(`Найдено писем: ${messages.length}`);
+
+    // Сортируем по дате и берём самое свежее
+    messages.sort((a, b) => {
+      const dateA = new Date(a.attributes.date);
+      const dateB = new Date(b.attributes.date);
+      return dateB - dateA;
+    });
+
+    const latest = messages[0];
+    console.log('Дата последнего письма:', latest.attributes.date);
+
+    // Собираем все содержимое письма
+    let emailBody = '';
+    let htmlContent = '';
+
+    if (latest.parts && latest.parts.length > 0) {
+      for (const part of latest.parts) {
+        if (part.body && typeof part.body === 'string') {
+          emailBody += part.body + '\n';
+
+          // Ищем HTML контент в любой части
+          if (part.body.includes('<html') || part.body.includes('<a href') || part.body.includes('<table')) {
+            htmlContent = part.body;
+            console.log('HTML контент найден в части:', part.which, 'длина:', htmlContent.length);
+          }
+        }
+      }
+    }
+
+    await connection.end();
+    console.log('IMAP соединение закрыто');
+
+    if (!emailBody) {
+      console.log('Содержимое письма не найдено');
+      return res.status(500).json({
+        success: false,
+        error: 'Email body not found',
+        emailType: type
+      });
+    }
+
+    console.log('Содержимое письма найдено, общая длина:', emailBody.length);
+
+    let result = {
+      success: true,
+      emailType: type,
+      emailDate: latest.attributes.date,
+      emailSubject: latest.attributes.subject
+    };
+
+    // Обрабатываем в зависимости от типа
+    if (type === 'otp') {
+      const otpCode = extractOTPCode(htmlContent, emailBody);
+      if (otpCode) {
+        result.otp = otpCode;
+        console.log('✅ OTP код успешно извлечен:', otpCode);
+      } else {
+        result.success = false;
+        result.message = 'OTP code not found in email';
+        console.log('❌ OTP код не найден в письме');
+      }
+    } else if (type === 'appointment') {
+      const appointmentLink = extractAppointmentLink(htmlContent, emailBody);
+      if (appointmentLink) {
+        result.link = appointmentLink;
+        console.log('✅ Ссылка на запись успешно извлечена');
+      } else {
+        result.success = false;
+        result.message = 'Appointment link not found in email';
+        console.log('❌ Ссылка на запись не найдена в письме');
+      }
+    }
+
+    res.json(result);
+
+  } catch (err) {
+    console.error('IMAP Error:', err);
+
+    if (connection) {
+      try {
+        await connection.end();
+      } catch (closeErr) {
+        console.error('Ошибка при закрытии соединения:', closeErr);
+      }
+    }
+
+    let errorMessage = err.message;
+    if (err.textCode === 'AUTHENTICATIONFAILED') {
+      errorMessage = 'Неверный email или пароль для IMAP';
+    } else if (err.message.includes('timeout')) {
+      errorMessage = 'Таймаут подключения к IMAP серверу';
+    } else if (err.message.includes('ENOTFOUND')) {
+      errorMessage = 'IMAP сервер недоступен';
+    } else if (err.message.includes('Invalid BODY')) {
+      errorMessage = 'Ошибка формата IMAP запроса';
+    }
+
+    res.status(500).json({
+      success: false,
+      error: errorMessage,
+      details: err.message,
+      emailType: type
+    });
+  }
+});
+
+// Старый endpoint для обратной совместимости (OTP)
 app.post('/mail', async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
@@ -343,7 +591,21 @@ app.post('/mail', async (req, res) => {
 });
 
 app.get('/', (req, res) => {
-  res.send('Firstmail IMAP API up and running');
+  res.json({
+    service: 'Firstmail IMAP API',
+    version: '2.0.0',
+    endpoints: {
+      otp: 'POST /mail/otp',
+      appointment: 'POST /mail/appointment',
+      legacy: 'POST /mail (OTP verification)'
+    },
+    usage: {
+      body: {
+        email: 'your-email@firstmail.ltd',
+        password: 'your-password'
+      }
+    }
+  });
 });
 
 app.get('/test', (req, res) => {
@@ -357,5 +619,8 @@ app.get('/test', (req, res) => {
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`Server started on port ${port}`);
+  console.log(`📧 OTP endpoint: /mail/otp`);
+  console.log(`📅 Appointment endpoint: /mail/appointment`);
+  console.log(`🔗 Legacy endpoint: /mail`);
   console.log(`Test endpoint: http://localhost:${port}/test`);
 });
